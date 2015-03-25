@@ -1,0 +1,32 @@
+{
+  "manifest_version": 2,
+  "name": "FIDO U2F BLE Helper",
+  "short_name": "U2F BLE Helper",
+  "description": "Helper App that plugs into the u2f-chrome-extension to providing FIDO U2F over Bluetooth Smart",
+  "version": "0.0.1",
+  "minimum_chrome_version": "38",
+
+  "icons": {
+    "16": "assets/icon_16.png",
+    "128": "assets/icon_128.png"
+  },
+
+  "app": {
+    "background": {
+      "scripts": ["background.js"]
+    }
+  },
+  "bluetooth":{
+    "uuids":["f1d0fff0-deaa-ecee-b42f-c9ba7ed623bb", "00002902-0000-1000-8000-00805f9b34fb", "f1d0fff1-deaa-ecee-b42f-c9ba7ed623bb","f1d0fff2-deaa-ecee-b42f-c9ba7ed623bb"],
+    "low_energy": true
+  },
+  "externally_connectable": {
+    "ids": ["pfboblefjcgdjicmnffhdgionmgcdmne"],
+    "matches": [
+      "https://crxjs-dot-u2fdemo.appspot.com/*"
+    ],
+    "accepts_tls_channel_id": true
+
+  }
+
+}
