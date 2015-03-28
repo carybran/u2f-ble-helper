@@ -1,5 +1,17 @@
 //U2F helper functions
 var U2F_HEADER_BYTES = 7;
+var U2F_KEYHANDLE_BYTE_LENGTH = 1;
+
+
+var U2F_BLE_PING = 0x81;
+var U2F_BLE_MSG = 0x83;
+var U2F_BLE_ERROR = 0xbf;
+
+var U2F_ENROLL_COMMAND = 0x01;
+var U2F_AUTHENTICATE_COMMAND = 0x02;
+
+var U2F_REQUIRE_PHYSICAL_PRESENCE = 0x03;
+
 
 
 /**
@@ -27,49 +39,72 @@ var U2F_HEADER_BYTES = 7;
  *
  *
  * */
-function buildU2FRegisterCommand(enrollInfo){
-  var registerCommandHex = "83"
-
-  //challenge parameter
-  var challengeB64 = enrollInfo.enrollChallenges[0].challengeHash;//base64FromURLSafe(enrollInfo.enrollChallenges[0].challengeHash);
-  var cryptoChallenge = CryptoJS.SHA256(challengeB64);
-  var hashChallengeHex = cryptoChallenge.toString(CryptoJS.enc.Hex);
-
-  var appB64 = enrollInfo.enrollChallenges[0].appIdHash;//base64FromURLSafe(enrollInfo.enrollChallenges[0].appIdHash);
-  var cryptoApp = CryptoJS.SHA256(appB64);
-  var hashAppHex = cryptoApp.toString(CryptoJS.enc.Hex);
-
-  console.log("got challenge: " + hashChallengeHex);
-  console.log("got app: " + hashAppHex);
-
-   var lenU2F = (hashAppHex.length/2) + (hashChallengeHex.length/2);
-   var lenU2FHex = lenU2F.toString(16);
-   if(lenU2F < 256){
-     lenU2FHex = "0000" + ( lenU2F > 15 ? lenU2FHex : "0" + lenU2FHex);
-   }
-   else if(lenU2F > 255 && lenU2F < 65536){
-     lenU2FHex = "00" + ( lenU2F > 4095 ? lenU2FHex : "0" + lenU2FHex);
-   }
-   else{
-     lenU2FHex =( lenU2F > 1048575 ? lenU2FHex : "0" + lenU2FHex);
-   }
-
-   var lenData = lenU2F + U2F_HEADER_BYTES;
-   var lenDataHex = lenData.toString(16);
-   if(lenData <  256){
-     lenDataHex = "00" + ( lenData > 15 ? lenDataHex : "0" + lenDataHex);
-   }
-   else if(lenData > 255){
-     lenDataHex = ( lenU2F > 4095 ? lenDataHex : "0" + lenDataHex);
-   }
-
-  var messageHex = "83" + lenDataHex + "00010300" + lenU2FHex + hashChallengeHex + hashAppHex;
-
-  return packHexToBinary(messageHex);
-
-
+function createEnrollCommand(enrollInfo){
+  var hashChallenge = B64_decode(enrollInfo.enrollChallenges[0].challengeHash); 
+  var hashApp = B64_decode(enrollInfo.enrollChallenges[0].appIdHash);
+  
+  var lenU2F = hashChallenge.length + hashApp.length;
+  var lenData = lenU2F + U2F_HEADER_BYTES;
+  var msgLengthHi = (lenData & 0XFF00) >> 8;
+  var msgLengthLow = (lenData & 0x00FF);
+  
+  //calculate the enroll request length
+  var enrollLengthHi = (lenU2F & 0XFF00) >> 8;
+  var enrollLengthLow = (lenU2F & 0x00FF);
+  
+  //build up the message to send to the BLE U2F authenticator
+  var apdu = new Uint8Array([U2F_BLE_MSG, msgLengthHi, msgLengthLow, 0x00, U2F_ENROLL_COMMAND, U2F_REQUIRE_PHYSICAL_PRESENCE, 0x00, 0x00, enrollLengthHi, enrollLengthLow]);
+  var u8 = new Uint8Array(apdu.length +  hashChallenge.length + hashApp.length);
+  u8.set(apdu);
+  u8.set(hashChallenge, apdu.length);
+  u8.set(hashApp, apdu.length + hashChallenge.length);
+  return u8.buffer;
 }
 
+/**
+ * Sign helper request coming in looks like this
+ * 
+ * var sign_helper_request = {
+  "type": "sign_helper_request",
+  "timeoutSeconds": float
+  "signData": [
+    {
+      "version": undefined || "U2F_V1" || "U2F_V2",
+      "appIdHash": websafe-b64
+      "challengeHash": websafe-b64
+      "keyHandle": websafe-b64
+    }+
+  ],
+ };
+*/
+function createSignCommand(signInfo){
+  var hashChallenge = B64_decode(signInfo.signData[0].challengeHash); 
+  var hashApp = B64_decode(signInfo.signData[0].appIdHash);
+  var hashHandle = B64_decode(signInfo.signData[0].keyHandle);
+  
+  var lenU2F = hashChallenge.length + hashApp.length + hashHandle.length;
+  var lenData = lenU2F + U2F_HEADER_BYTES;
+  var msgLengthHi = (lenData & 0XFF00) >> 8;
+  var msgLengthLow = (lenData & 0x00FF);
+  
+  //calculate the authentication message length
+  var authLengthHi = (lenU2F & 0XFF00) >> 8;
+  var authLengthLow = (lenU2F & 0x00FF);
+  
+  var keyHandleLength = hashHandle.length;
+  
+  //build up the message to send to the BLE U2F authenticator
+  var apdu = new Uint8Array([U2F_BLE_MSG, msgLengthHi, msgLengthLow, 0x00, U2F_AUTHENTICATE_COMMAND, U2F_REQUIRE_PHYSICAL_PRESENCE, 0x00, 0x00, authLengthHi, authLengthLow]);
+  var u8 = new Uint8Array(apdu.length +  hashChallenge.length + hashApp.length + U2F_KEYHANDLE_BYTE_LENGTH + hashHandle.length);
+  u8.set(apdu);
+  u8.set(hashChallenge, apdu.length);
+  u8.set(hashApp, apdu.length + hashChallenge.length);
+  u8[apdu.length + hashChallenge.length + hashApp.length] = keyHandleLength;
+  u8.set(hashHandle, apdu.length + hashChallenge.length + hashApp.length + U2F_KEYHANDLE_BYTE_LENGTH);
+  return u8.buffer;
+  
+  
+}
 
  //takes a hex string and for each character this
   //method will parse the integer value and packs it into a uint8 byte array
@@ -109,25 +144,3 @@ function unPackBinaryToHex(byteArray){
       }
       return hexString;
   }
-
-function base64FromURLSafe(webSafeB64){
-  var b64 = "";
-  for(var i = 0; i < webSafeB64.length; i++){
-    var c = webSafeB64.charAt(i);
-    switch(c){
-      case '+':
-        b64 += '-';
-        break;
-      case '/':
-        b64 += '_';
-        break;
-      case '=':
-        b64 += '*';
-        break;
-      default:
-        b64 += c;
-        break;
-    }
-  }
-  return b64;
-}
